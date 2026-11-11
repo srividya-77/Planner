@@ -1,0 +1,214 @@
+// schema.prisma
+// All times stored as UTC. Displayed as IST (UTC+5:30) in the app.
+// All IDs are UUIDs.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── users ────────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+
+  // Study window (stored as UTC time strings, e.g. "03:30:00" = 9 AM IST)
+  dayStartTime String   @default("03:30:00") @map("day_start_time")
+  dayEndTime   String   @default("16:30:00") @map("day_end_time")
+
+  // Burnout settings (UTC time strings)
+  lunchStart   String   @default("07:30:00") @map("lunch_start")
+  lunchEnd     String   @default("08:30:00") @map("lunch_end")
+  dinnerStart  String   @default("14:30:00") @map("dinner_start")
+  dinnerEnd    String   @default("15:30:00") @map("dinner_end")
+  dayCutoff    String   @default("16:30:00") @map("day_cutoff")
+
+  // 0 = Sunday, 1 = Monday … 6 = Saturday
+  restDay      Int      @default(0) @map("rest_day")
+
+  timezone     String   @default("Asia/Kolkata")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  // Relations
+  goals         Goal[]
+  tasks         Task[]
+  fixedEvents   FixedEvent[]
+  blocks        Block[]
+  groupMembers  GroupMember[]
+  groupBookings GroupBooking[] @relation("BookedBy")
+  createdGroups Group[]        @relation("CreatedBy")
+
+  @@map("users")
+}
+
+// ─── goals ────────────────────────────────────────────────────────────────────
+
+model Goal {
+  id        String   @id @default(uuid())
+  ownerId   String   @map("owner_id")
+  name      String
+  weight    Int      // 1–5
+  rank      Int      // 1 = highest priority; unique per owner enforced below
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  owner User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  tasks Task[]
+
+  @@unique([ownerId, rank])
+  @@map("goals")
+}
+
+// ─── tasks ────────────────────────────────────────────────────────────────────
+
+enum TaskRepeatRule {
+  none
+  daily
+  weekly
+  weekdays
+}
+
+enum TaskStatus {
+  pending
+  in_progress
+  completed
+  cancelled
+}
+
+model Task {
+  id                    String         @id @default(uuid())
+  ownerId               String         @map("owner_id")
+  goalId                String         @map("goal_id")
+
+  title                 String
+  estimateMinutes       Int            @map("estimate_minutes")
+  timeSpentMinutes      Int            @default(0) @map("time_spent_minutes")
+  timeRemainingMinutes  Int            @map("time_remaining_minutes")
+
+  deadline              DateTime       // stored as UTC midnight of the deadline date
+  repeatRule            TaskRepeatRule @default(none) @map("repeat_rule")
+  status                TaskStatus     @default(pending)
+
+  createdAt             DateTime       @default(now()) @map("created_at")
+
+  owner  User    @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  goal   Goal    @relation(fields: [goalId], references: [id], onDelete: Restrict)
+  blocks Block[]
+
+  @@map("tasks")
+}
+
+// ─── fixed_events ─────────────────────────────────────────────────────────────
+
+enum FixedEventRepeat {
+  none
+  weekly
+}
+
+model FixedEvent {
+  id          String           @id @default(uuid())
+  ownerId     String           @map("owner_id")
+  title       String
+  startTime   DateTime         @map("start_time")
+  endTime     DateTime         @map("end_time")
+  repeatRule  FixedEventRepeat @default(none) @map("repeat_rule")
+
+  createdAt   DateTime         @default(now()) @map("created_at")
+
+  owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@map("fixed_events")
+}
+
+// ─── groups ───────────────────────────────────────────────────────────────────
+
+model Group {
+  id          String   @id @default(uuid())
+  name        String
+  inviteCode  String   @unique @map("invite_code")
+  createdById String   @map("created_by")
+
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  createdBy     User          @relation("CreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  members       GroupMember[]
+  groupBookings GroupBooking[]
+
+  @@map("groups")
+}
+
+// ─── group_members ────────────────────────────────────────────────────────────
+
+model GroupMember {
+  groupId  String   @map("group_id")
+  userId   String   @map("user_id")
+  joinedAt DateTime @default(now()) @map("joined_at")
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([groupId, userId])
+  @@map("group_members")
+}
+
+// ─── group_bookings ───────────────────────────────────────────────────────────
+
+enum GroupBookingStatus {
+  confirmed
+  cancelled
+}
+
+model GroupBooking {
+  id        String             @id @default(uuid())
+  groupId   String             @map("group_id")
+  bookedById String            @map("booked_by")
+  startTime DateTime           @map("start_time")
+  endTime   DateTime           @map("end_time")
+  status    GroupBookingStatus @default(confirmed)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  group     Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  bookedBy  User    @relation("BookedBy", fields: [bookedById], references: [id], onDelete: Restrict)
+  blocks    Block[]
+
+  @@map("group_bookings")
+}
+
+// ─── blocks ───────────────────────────────────────────────────────────────────
+
+enum BlockStatus {
+  scheduled
+  completed
+  cancelled
+  overrun
+}
+
+model Block {
+  id             String      @id @default(uuid())
+  userId         String      @map("user_id")
+
+  // Exactly one of these is set; the other is null
+  taskId         String?     @map("task_id")
+  groupBookingId String?     @map("group_booking_id")
+
+  startTime      DateTime    @map("start_time")
+  endTime        DateTime    @map("end_time")
+  actualMinutes  Int?        @map("actual_minutes")
+  status         BlockStatus @default(scheduled)
+
+  createdAt      DateTime    @default(now()) @map("created_at")
+
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task         Task?         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  groupBooking GroupBooking? @relation(fields: [groupBookingId], references: [id], onDelete: Cascade)
+
+  @@map("blocks")
+}
